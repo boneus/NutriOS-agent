@@ -89,7 +89,7 @@ export default function Home() {
             <dl>
               <div><dt>Verdict</dt><dd>{result.review.verdict}</dd></div>
               <div><dt>Score</dt><dd>{result.review.score}/10</dd></div>
-              <div><dt>Rounds</dt><dd>{result.rounds}</dd></div>
+              <div><dt>Rounds</dt><dd>{result.rounds.length}</dd></div>
             </dl>
             <h3>Issues</h3>
             {result.review.issues.length > 0 ? (

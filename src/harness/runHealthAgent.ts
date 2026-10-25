@@ -3,16 +3,19 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { loadEnvFile } from "node:process";
 import { createHealthCoach } from "../agents/healthCoach";
-import {
-  createSafetyReviewer,
-  parseReview,
-  type Review,
-} from "../agents/safetyReviewer";
+import { createSafetyReviewer } from "../agents/safetyReviewer";
+import { loadActivePrompts, type PromptVersions } from "./promptVersions";
+import { RoundHistory, type RoundState } from "./rounds";
+import { calculateScore } from "./score";
+import { validateReview, type Review } from "./validateReview";
 
 export interface RunHealthAgentResult {
   plan: string;
   review: Review;
-  rounds: number;
+  rounds: RoundState[];
+  finalScore: number | null;
+  promptVersions: PromptVersions;
+  durationMs: number;
 }
 
 function loadLocalEnv(): void {
@@ -29,15 +32,23 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-export async function runHealthAgent(task: string): Promise<RunHealthAgentResult> {
+export async function runHealthAgent(
+  task: string,
+  maxRounds = 3,
+): Promise<RunHealthAgentResult> {
   const normalizedTask = task.trim();
   if (!normalizedTask) throw new Error("Задача не должна быть пустой");
+  if (!Number.isInteger(maxRounds) || maxRounds <= 0) {
+    throw new Error("maxRounds должен быть положительным целым числом");
+  }
 
+  const startedAt = Date.now();
   loadLocalEnv();
   const dataDirectory = join(process.cwd(), "data");
-  const [profile, log] = await Promise.all([
+  const [profile, log, activePrompts] = await Promise.all([
     readFile(join(dataDirectory, "profile.md"), "utf8"),
     readFile(join(dataDirectory, "log.md"), "utf8"),
+    loadActivePrompts(),
   ]);
 
   const model = process.env.DEEPSEEK_MODEL?.trim() || "deepseek-chat";
@@ -47,29 +58,35 @@ export async function runHealthAgent(task: string): Promise<RunHealthAgentResult
     useResponses: false,
   });
   const runner = new Runner({ modelProvider: provider, tracingDisabled: true });
-  const coach = createHealthCoach(model);
-  const reviewer = createSafetyReviewer(model);
+  const coach = createHealthCoach(model, activePrompts.coach);
+  const reviewer = createSafetyReviewer(model, activePrompts.reviewer);
+  const history = new RoundHistory();
 
-  const reviewPlan = async (plan: string): Promise<Review> => {
+  const reviewPlan = (plan: string): Promise<Review> => {
     const input = `Задача пользователя:\n${normalizedTask}\n\nПрофиль:\n${profile}\n\nПлан:\n${plan}`;
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    return validateReview(async () => {
       const result = await runner.run(reviewer, input);
-      try {
-        if (typeof result.finalOutput !== "string") throw new Error("Пустой ответ reviewer-а");
-        return parseReview(result.finalOutput);
-      } catch (error) {
-        lastError = error;
-        if (attempt === 1) console.warn("Reviewer вернул невалидный JSON, повторяю запрос...");
-      }
-    }
-    throw new Error(`Reviewer дважды вернул невалидный JSON: ${String(lastError)}`);
+      return result.finalOutput;
+    });
+  };
+
+  const buildResult = (plan: string, review: Review): RunHealthAgentResult => {
+    const rounds = history.all();
+    const { finalScore } = calculateScore(rounds);
+
+    return {
+      plan,
+      review,
+      rounds,
+      finalScore,
+      promptVersions: { ...activePrompts.versions },
+      durationMs: Date.now() - startedAt,
+    };
   };
 
   let draft = "";
   let issues: string[] = [];
-  for (let round = 1; round <= 3; round++) {
+  for (let round = 1; round <= maxRounds; round++) {
     const coachInput = `Задача:\n${normalizedTask}\n\nПрофиль:\n${profile}\n\nДневник:\n${log}` +
       (draft ? `\n\nПредыдущий план:\n${draft}\n\nИсправь его по замечаниям reviewer-а:\n- ${issues.join("\n- ")}` : "");
     const result = await runner.run(coach, coachInput);
@@ -77,15 +94,20 @@ export async function runHealthAgent(task: string): Promise<RunHealthAgentResult
 
     draft = result.finalOutput.trim();
     const review = await reviewPlan(draft);
-    const agentResult = { plan: draft, review, rounds: round };
+    history.add({ round, plan: draft, review });
 
-    if (review.verdict === "needs_human_professional") return agentResult;
+    if (review.verdict === "needs_human_professional") {
+      return buildResult(draft, review);
+    }
     if (review.verdict === "approve") {
       await writeFile(join(dataDirectory, "output.md"), `${draft}\n`, "utf8");
-      return agentResult;
+      return buildResult(draft, review);
     }
     issues = review.issues;
   }
 
-  throw new Error("План не одобрен после трёх раундов ревизии");
+  if (maxRounds === 3) {
+    throw new Error("План не одобрен после трёх раундов ревизии");
+  }
+  throw new Error(`План не одобрен после ${maxRounds} раундов ревизии`);
 }
