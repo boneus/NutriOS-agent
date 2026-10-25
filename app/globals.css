@@ -40,6 +40,11 @@ dl > div { display: flex; justify-content: space-between; gap: 20px; padding: 10
 dt { color: #60736c; }
 dd { margin: 0; font-weight: 750; overflow-wrap: anywhere; }
 li { margin-bottom: 8px; }
+.round-history { margin-top: 20px; border-bottom: 1px solid #e6eee9; }
+.round-history summary { padding: 10px 0; font-weight: 750; cursor: pointer; }
+.round-history summary:focus-visible { outline: 3px solid rgba(20, 128, 94, .2); outline-offset: 3px; border-radius: 4px; }
+.round-history ol { margin: 4px 0 14px; padding-left: 24px; color: #526861; }
+.round-history li { padding-left: 4px; overflow-wrap: anywhere; }
 .warning { grid-column: 1 / -1; border-color: #f0b86a; color: #713d00; background: #fff8e7; }
 .warning h2 { margin-top: 0; }
 

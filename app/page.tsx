@@ -88,9 +88,22 @@ export default function Home() {
             <h2>Проверка</h2>
             <dl>
               <div><dt>Verdict</dt><dd>{result.review.verdict}</dd></div>
-              <div><dt>Score</dt><dd>{result.review.score}/10</dd></div>
-              <div><dt>Rounds</dt><dd>{result.rounds.length}</dd></div>
+              <div><dt>Review score</dt><dd>{result.review.score}/10</dd></div>
+              <div><dt>Final score</dt><dd>{result.finalScore === null ? "—" : `${result.finalScore}/10`}</dd></div>
+              <div><dt>Duration</dt><dd>{result.durationMs.toLocaleString("ru-RU")} ms</dd></div>
+              <div><dt>Coach prompt</dt><dd>{result.promptVersions.coach}</dd></div>
+              <div><dt>Reviewer prompt</dt><dd>{result.promptVersions.reviewer}</dd></div>
             </dl>
+            <details className="round-history">
+              <summary>История раундов ({result.rounds.length})</summary>
+              <ol>
+                {result.rounds.map((round) => (
+                  <li key={round.round}>
+                    Round {round.round} — {round.review.verdict} — {round.review.score}/10
+                  </li>
+                ))}
+              </ol>
+            </details>
             <h3>Issues</h3>
             {result.review.issues.length > 0 ? (
               <ul>{result.review.issues.map((issue) => <li key={issue}>{issue}</li>)}</ul>
