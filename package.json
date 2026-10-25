@@ -1,0 +1,22 @@
+{
+  "name": "local-wellness-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx index.ts",
+    "typecheck": "tsc --noEmit --target ES2022 --module NodeNext --moduleResolution NodeNext --skipLibCheck index.ts"
+  },
+  "engines": {
+    "node": ">=20.12.0"
+  },
+  "dependencies": {
+    "@openai/agents": "0.21.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}
