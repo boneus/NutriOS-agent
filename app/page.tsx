@@ -86,6 +86,20 @@ export default function Home() {
 
           <aside>
             <h2>Проверка</h2>
+            <h3>Что сделал агент</h3>
+            {result.toolCallDetails.length > 0 ? (
+              <ol className="tool-calls">
+                {result.toolCallDetails.map((toolCall, index) => (
+                  <li key={`${index}-${toolCall.name}`}>
+                    <strong>{toolCall.name}</strong>
+                    <details>
+                      <summary>Параметры вызова</summary>
+                      <pre>{JSON.stringify(toolCall.parameters, null, 2)}</pre>
+                    </details>
+                  </li>
+                ))}
+              </ol>
+            ) : <p>Tools не вызывались.</p>}
             <dl>
               <div><dt>Verdict</dt><dd>{result.review.verdict}</dd></div>
               <div><dt>Review score</dt><dd>{result.review.score}/10</dd></div>

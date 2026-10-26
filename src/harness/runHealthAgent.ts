@@ -1,9 +1,9 @@
-import { OpenAIProvider, Runner } from "@openai/agents";
-import { readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { OpenAIProvider, Runner, type RunItem } from "@openai/agents";
 import { loadEnvFile } from "node:process";
 import { createHealthCoach } from "../agents/healthCoach";
 import { createSafetyReviewer } from "../agents/safetyReviewer";
+import { savePlanTool } from "../skills/plans";
+import { generateShoppingListTool } from "../skills/shopping";
 import { loadActivePrompts, type PromptVersions } from "./promptVersions";
 import { RoundHistory, type RoundState } from "./rounds";
 import { calculateScore } from "./score";
@@ -15,7 +15,32 @@ export interface RunHealthAgentResult {
   rounds: RoundState[];
   finalScore: number | null;
   promptVersions: PromptVersions;
+  toolCalls: string[];
+  toolCallDetails: ToolCallDetails[];
   durationMs: number;
+}
+
+export interface ToolCallDetails {
+  name: string;
+  parameters: unknown;
+}
+
+function parseToolParameters(rawParameters: string): unknown {
+  try {
+    return JSON.parse(rawParameters) as unknown;
+  } catch {
+    return rawParameters;
+  }
+}
+
+function collectToolCalls(result: { newItems: RunItem[] }): ToolCallDetails[] {
+  return result.newItems.flatMap((item) => {
+    if (item.type !== "tool_call_item" || item.rawItem.type !== "function_call") return [];
+    return [{
+      name: item.rawItem.name,
+      parameters: parseToolParameters(item.rawItem.arguments),
+    }];
+  });
 }
 
 function loadLocalEnv(): void {
@@ -38,18 +63,13 @@ export async function runHealthAgent(
 ): Promise<RunHealthAgentResult> {
   const normalizedTask = task.trim();
   if (!normalizedTask) throw new Error("Задача не должна быть пустой");
-  if (!Number.isInteger(maxRounds) || maxRounds <= 0) {
-    throw new Error("maxRounds должен быть положительным целым числом");
+  if (!Number.isInteger(maxRounds) || maxRounds <= 0 || maxRounds > 3) {
+    throw new Error("maxRounds должен быть целым числом от 1 до 3");
   }
 
   const startedAt = Date.now();
   loadLocalEnv();
-  const dataDirectory = join(process.cwd(), "data");
-  const [profile, log, activePrompts] = await Promise.all([
-    readFile(join(dataDirectory, "profile.md"), "utf8"),
-    readFile(join(dataDirectory, "log.md"), "utf8"),
-    loadActivePrompts(),
-  ]);
+  const activePrompts = await loadActivePrompts();
 
   const model = process.env.DEEPSEEK_MODEL?.trim() || "deepseek-chat";
   const provider = new OpenAIProvider({
@@ -59,13 +79,16 @@ export async function runHealthAgent(
   });
   const runner = new Runner({ modelProvider: provider, tracingDisabled: true });
   const coach = createHealthCoach(model, activePrompts.coach);
+  const finalizer = createHealthCoach(model, activePrompts.coach, [savePlanTool, generateShoppingListTool]);
   const reviewer = createSafetyReviewer(model, activePrompts.reviewer);
   const history = new RoundHistory();
+  const toolCallDetails: ToolCallDetails[] = [];
 
   const reviewPlan = (plan: string): Promise<Review> => {
-    const input = `Задача пользователя:\n${normalizedTask}\n\nПрофиль:\n${profile}\n\nПлан:\n${plan}`;
     return validateReview(async () => {
-      const result = await runner.run(reviewer, input);
+      // Reviewer receives only the proposed plan and has no tools, so it cannot
+      // read user files or cause side effects.
+      const result = await runner.run(reviewer, plan);
       return result.finalOutput;
     });
   };
@@ -80,6 +103,8 @@ export async function runHealthAgent(
       rounds,
       finalScore,
       promptVersions: { ...activePrompts.versions },
+      toolCalls: toolCallDetails.map(({ name }) => name),
+      toolCallDetails: toolCallDetails.map(({ name, parameters }) => ({ name, parameters })),
       durationMs: Date.now() - startedAt,
     };
   };
@@ -87,9 +112,10 @@ export async function runHealthAgent(
   let draft = "";
   let issues: string[] = [];
   for (let round = 1; round <= maxRounds; round++) {
-    const coachInput = `Задача:\n${normalizedTask}\n\nПрофиль:\n${profile}\n\nДневник:\n${log}` +
+    const coachInput = `Задача:\n${normalizedTask}` +
       (draft ? `\n\nПредыдущий план:\n${draft}\n\nИсправь его по замечаниям reviewer-а:\n- ${issues.join("\n- ")}` : "");
     const result = await runner.run(coach, coachInput);
+    toolCallDetails.push(...collectToolCalls(result));
     if (typeof result.finalOutput !== "string") throw new Error("Коуч не вернул план");
 
     draft = result.finalOutput.trim();
@@ -100,7 +126,20 @@ export async function runHealthAgent(
       return buildResult(draft, review);
     }
     if (review.verdict === "approve") {
-      await writeFile(join(dataDirectory, "output.md"), `${draft}\n`, "utf8");
+      // Side-effect tools are unavailable while drafting. The harness exposes
+      // them only after approval, because a prompt instruction alone cannot
+      // enforce the persistence safety boundary.
+      const finalization = await runner.run(finalizer,
+        `План уже одобрен Safety Reviewer. Обязательно вызови savePlan ровно один раз, передав план без изменений. ` +
+        `Если исходная задача просит список покупок, также вызови generateShoppingList; иначе не вызывай его.\n\n` +
+        `Исходная задача:\n${normalizedTask}\n\nОдобренный план:\n${draft}`,
+        { maxTurns: 4 },
+      );
+      const finalizationToolCalls = collectToolCalls(finalization);
+      toolCallDetails.push(...finalizationToolCalls);
+      if (!finalizationToolCalls.some(({ name }) => name === "savePlan")) {
+        throw new Error("Коуч не сохранил одобренный план");
+      }
       return buildResult(draft, review);
     }
     issues = review.issues;

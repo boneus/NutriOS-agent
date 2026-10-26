@@ -45,6 +45,11 @@ li { margin-bottom: 8px; }
 .round-history summary:focus-visible { outline: 3px solid rgba(20, 128, 94, .2); outline-offset: 3px; border-radius: 4px; }
 .round-history ol { margin: 4px 0 14px; padding-left: 24px; color: #526861; }
 .round-history li { padding-left: 4px; overflow-wrap: anywhere; }
+.tool-calls { margin: 0 0 16px; padding-left: 24px; color: #526861; }
+.tool-calls li { overflow-wrap: anywhere; }
+.tool-calls details { margin-top: 6px; }
+.tool-calls summary { cursor: pointer; font-size: .9rem; }
+.tool-calls pre { max-height: 180px; margin-top: 8px; padding: 10px; overflow: auto; border-radius: 8px; background: #f2f7f3; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .8rem; }
 .warning { grid-column: 1 / -1; border-color: #f0b86a; color: #713d00; background: #fff8e7; }
 .warning h2 { margin-top: 0; }
 
