@@ -1,0 +1,28 @@
+{
+  "runId": "run-example",
+  "task": "Составь спокойный wellness-план на день с низким уровнем энергии.",
+  "promptVersions": {
+    "coach": "v2",
+    "reviewer": "v1"
+  },
+  "model": "deepseek-chat",
+  "rounds": [
+    {
+      "round": 1,
+      "planExcerpt": "# План\n\nПример первых 500 символов одобренного плана.",
+      "review": {
+        "verdict": "approve",
+        "score": 8,
+        "issues": []
+      }
+    }
+  ],
+  "toolCalls": [
+    "getProfile",
+    "savePlan"
+  ],
+  "finalScore": 8,
+  "verdict": "approve",
+  "durationMs": 4200,
+  "createdAt": "2026-10-26T12:00:00.000Z"
+}

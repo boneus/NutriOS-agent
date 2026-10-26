@@ -7,6 +7,7 @@ import { generateShoppingListTool } from "../skills/shopping";
 import { loadActivePrompts, type PromptVersions } from "./promptVersions";
 import { RoundHistory, type RoundState } from "./rounds";
 import { calculateScore } from "./score";
+import { traceRun } from "./traceRun";
 import { validateReview, type Review } from "./validateReview";
 
 export interface RunHealthAgentResult {
@@ -86,18 +87,21 @@ export async function runHealthAgent(
 
   const reviewPlan = (plan: string): Promise<Review> => {
     return validateReview(async () => {
-      // Reviewer receives only the proposed plan and has no tools, so it cannot
-      // read user files or cause side effects.
-      const result = await runner.run(reviewer, plan);
+      // Reviewer receives the task and proposed plan but has no tools, so it
+      // cannot read user files or cause side effects.
+      const result = await runner.run(
+        reviewer,
+        `Исходная задача пользователя:\n${normalizedTask}\n\nПредложенный план:\n${plan}`,
+      );
       return result.finalOutput;
     });
   };
 
-  const buildResult = (plan: string, review: Review): RunHealthAgentResult => {
+  const buildResult = async (plan: string, review: Review): Promise<RunHealthAgentResult> => {
     const rounds = history.all();
     const { finalScore } = calculateScore(rounds);
 
-    return {
+    const result: RunHealthAgentResult = {
       plan,
       review,
       rounds,
@@ -107,6 +111,9 @@ export async function runHealthAgent(
       toolCallDetails: toolCallDetails.map(({ name, parameters }) => ({ name, parameters })),
       durationMs: Date.now() - startedAt,
     };
+
+    await traceRun(normalizedTask, model, result);
+    return result;
   };
 
   let draft = "";
@@ -123,7 +130,7 @@ export async function runHealthAgent(
     history.add({ round, plan: draft, review });
 
     if (review.verdict === "needs_human_professional") {
-      return buildResult(draft, review);
+      return await buildResult(draft, review);
     }
     if (review.verdict === "approve") {
       // Side-effect tools are unavailable while drafting. The harness exposes
@@ -140,7 +147,7 @@ export async function runHealthAgent(
       if (!finalizationToolCalls.some(({ name }) => name === "savePlan")) {
         throw new Error("Коуч не сохранил одобренный план");
       }
-      return buildResult(draft, review);
+      return await buildResult(draft, review);
     }
     issues = review.issues;
   }
