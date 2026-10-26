@@ -1,9 +1,10 @@
 import { OpenAIProvider, Runner, type RunItem } from "@openai/agents";
-import { loadEnvFile } from "node:process";
 import { createHealthCoach } from "../agents/healthCoach";
 import { createSafetyReviewer } from "../agents/safetyReviewer";
 import { ConfiguredMcpServers, type ToolSource } from "../mcp/configuredServers";
 import { generateShoppingListTool } from "../skills/shopping";
+import { createSearchKnowledgeTool, type KnowledgeRetrievalTrace } from "../rag/tool";
+import { suggestWorkoutTemplateTool } from "../skills/workouts";
 import { loadActivePrompts, type PromptVersions } from "./promptVersions";
 import { RoundHistory, type RoundState } from "./rounds";
 import { calculateScore } from "./score";
@@ -18,6 +19,7 @@ export interface RunHealthAgentResult {
   promptVersions: PromptVersions;
   toolCalls: string[];
   toolCallDetails: ToolCallDetails[];
+  knowledgeRetrievals: KnowledgeRetrievalTrace[];
   durationMs: number;
 }
 
@@ -49,14 +51,6 @@ function collectToolCalls(
   });
 }
 
-function loadLocalEnv(): void {
-  try {
-    loadEnvFile();
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-}
-
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`В .env не задана переменная ${name}`);
@@ -74,7 +68,6 @@ export async function runHealthAgent(
   }
 
   const startedAt = Date.now();
-  loadLocalEnv();
   const activePrompts = await loadActivePrompts();
   const model = process.env.DEEPSEEK_MODEL?.trim() || "deepseek-chat";
   const provider = new OpenAIProvider({
@@ -87,9 +80,6 @@ export async function runHealthAgent(
   try {
     await mcpServers.connect();
     const runner = new Runner({ modelProvider: provider, tracingDisabled: true });
-    const coach = createHealthCoach(model, activePrompts.coach, {
-      mcpServers: mcpServers.all(),
-    });
     const finalizer = createHealthCoach(model, activePrompts.coach, {
       name: "Health Coach Finalizer",
       tools: [generateShoppingListTool],
@@ -98,6 +88,12 @@ export async function runHealthAgent(
     const reviewer = createSafetyReviewer(model, activePrompts.reviewer);
     const history = new RoundHistory();
     const toolCallDetails: ToolCallDetails[] = [];
+    const knowledgeRetrievals: KnowledgeRetrievalTrace[] = [];
+    const searchKnowledgeTool = createSearchKnowledgeTool((retrieval) => knowledgeRetrievals.push(retrieval));
+    const coach = createHealthCoach(model, activePrompts.coach, {
+      tools: [suggestWorkoutTemplateTool, searchKnowledgeTool],
+      mcpServers: mcpServers.all(),
+    });
 
     const reviewPlan = (plan: string): Promise<Review> => {
       return validateReview(async () => {
@@ -123,6 +119,9 @@ export async function runHealthAgent(
         promptVersions: { ...activePrompts.versions },
         toolCalls: toolCallDetails.map(({ name }) => mcpServers.prefixedToolName(name)),
         toolCallDetails: toolCallDetails.map(({ name, parameters, source }) => ({ name, parameters, source })),
+        knowledgeRetrievals: knowledgeRetrievals.map(({ query, headings, chunkCount }) => ({
+          query, headings: [...headings], chunkCount,
+        })),
         durationMs: Date.now() - startedAt,
       };
 

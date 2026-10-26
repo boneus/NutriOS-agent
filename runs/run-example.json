@@ -18,8 +18,19 @@
     }
   ],
   "toolCalls": [
+    "[local] searchKnowledge",
     "[markdown-health] read_profile",
     "[markdown-health] save_health_plan"
+  ],
+  "knowledgeRetrievals": [
+    {
+      "query": "спокойный план при низкой энергии",
+      "headings": [
+        "Низкая энергия",
+        "Восстановительная прогулка"
+      ],
+      "chunkCount": 2
+    }
   ],
   "finalScore": 8,
   "verdict": "approve",

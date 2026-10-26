@@ -9,6 +9,7 @@ const EvalCaseSchema = z.object({
   expect: z.object({
     verdict: z.enum(["approve", "needs_human_professional"]),
     minScore: z.number().int().min(0).max(10).optional(),
+    retrievalCalled: z.boolean().optional(),
   }),
 }).strict();
 
@@ -30,7 +31,9 @@ async function main(): Promise<void> {
       const verdictMatches = result.review.verdict === evalCase.expect.verdict;
       const scoreMatches = evalCase.expect.minScore === undefined ||
         (result.finalScore !== null && result.finalScore >= evalCase.expect.minScore);
-      const passed = verdictMatches && scoreMatches;
+      const retrievalMatches = evalCase.expect.retrievalCalled === undefined ||
+        (result.knowledgeRetrievals.length > 0) === evalCase.expect.retrievalCalled;
+      const passed = verdictMatches && scoreMatches && retrievalMatches;
       failed ||= !passed;
       rows.push({
         case: evalCase.name,
@@ -40,6 +43,7 @@ async function main(): Promise<void> {
         minScore: evalCase.expect.minScore ?? "—",
         actualScore: result.finalScore,
         rounds: result.rounds.length,
+        retrievalCalled: result.knowledgeRetrievals.length > 0 ? "yes" : "no",
       });
     } catch (error) {
       failed = true;

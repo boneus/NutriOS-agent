@@ -22,6 +22,22 @@ NOTION_TOKEN=ntn_...
 
 `DEEPSEEK_MODEL` необязателен: по умолчанию используется `deepseek-chat`.
 
+Для RAG также передайте окружению процесса `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, `EMBEDDINGS_BASE_URL`, `EMBEDDINGS_API_KEY` и
+`EMBEDDINGS_MODEL`. Выполните SQL из `supabase/migrations/001_knowledge.sql` в
+Supabase SQL Editor, затем запустите `npm run ingest`. Ingest очищает
+`knowledge_chunks` перед записью, поэтому повторный запуск не создаёт дублей.
+
+## Memory vs RAG
+
+`profile.md` и `log.md` — личная память: они описывают, кто пользователь, его
+контекст и недавние наблюдения. Эти файлы остаются Markdown-данными и доступны
+Health Coach через MCP tools; они не переносятся в базу данных. `knowledge/` —
+это база знаний: что агент умеет рекомендовать, включая рецепты, правила питания,
+тренировочные шаблоны и восстановление. При ingest её секции превращаются в
+embeddings и сохраняются в Supabase pgvector. Перед составлением плана коуч ищет
+релевантные секции через retrieval tool и использует их как основу ответа.
+
 ## Веб-интерфейс
 
 ```bash
@@ -117,7 +133,7 @@ Safety Reviewer, reviewer JSON-валидация, scoring, rounds и traces о�
 
 ## Как дебажить агента
 
-Каждый успешно завершившийся запуск автоматически сохраняет компактный trace в `runs/run-<timestamp>.json`: задачу, модель, версии промптов, раунды reviewer-а с фрагментами планов, tool calls, verdict, score и длительность. В compact trace имена имеют вид `[weather] weather_forecast`, `[filesystem] write_file`, `[markdown-health] read_profile`, `[notion] ...` или `[local] suggestWorkoutTemplate`. UI получает структурированный `source` и показывает такой же badge. Ошибка локальной записи trace не прерывает ответ агента. Рабочие трейсы исключены из Git; `runs/run-example.json` документирует формат.
+Каждый успешно завершившийся запуск автоматически сохраняет компактный trace в `runs/run-<timestamp>.json`: задачу, модель, версии промптов, раунды reviewer-а с фрагментами планов, tool calls, retrieval queries с заголовками найденных секций, verdict, score и длительность. В compact trace имена имеют вид `[weather] weather_forecast`, `[filesystem] write_file`, `[markdown-health] read_profile`, `[notion] ...` или `[local] suggestWorkoutTemplate`. UI получает структурированный `source` и показывает такой же badge, а поиск знаний отображает как `🔍 knowledge: <query> → N chunks`. Ошибка локальной записи trace не прерывает ответ агента. Рабочие трейсы исключены из Git; `runs/run-example.json` документирует формат.
 
 ## Какие MCP могут пригодиться дальше
 
@@ -133,13 +149,13 @@ npm run replay runs/run-XXX.json
 
 Replay берёт `task` из указанного файла, запускает текущий `runHealthAgent` и сравнивает старые и новые `verdict`, `score`, число раундов, tool calls и версии промптов. Новый прогон также создаёт trace.
 
-После изменения модели, промптов или harness запустите пять последовательных mini-evals:
+После изменения модели, промптов или harness запустите шесть последовательных mini-evals:
 
 ```bash
 npm run eval
 ```
 
-Eval-кейсы находятся в `evals/cases/*.json` и выполняются строго последовательно. Таблица покажет `PASS`/`FAIL`; процесс завершится с ненулевым кодом, если хотя бы один кейс не соответствует ожидаемому verdict или минимальному score. Кейс `bad-medical-request` проходит только с verdict `needs_human_professional`.
+Eval-кейсы находятся в `evals/cases/*.json` и выполняются строго последовательно. Таблица покажет `PASS`/`FAIL`; процесс завершится с ненулевым кодом, если хотя бы один кейс не соответствует ожидаемому verdict, минимальному score или обязательному retrieval. Кейс `bad-medical-request` проходит только с verdict `needs_human_professional`.
 
 > **Важно:** `replay` и `eval` делают реальные запросы к DeepSeek и могут повлечь расходы. Каждый их запуск создаёт trace, а каждый результат с verdict `approve` проходит обычную финализацию и обновляет `data/output.md`; запрос списка покупок также может обновить `data/shopping.md`.
 
@@ -151,11 +167,12 @@ Eval-кейсы находятся в `evals/cases/*.json` и выполняют
   "task": "Задача агенту",
   "expect": {
     "verdict": "approve",
-    "minScore": 7
+    "minScore": 7,
+    "retrievalCalled": true
   }
 }
 ```
 
-`expect.verdict` принимает `approve` или `needs_human_professional`; `minScore` необязателен.
+`expect.verdict` принимает `approve` или `needs_human_professional`; `minScore` и `retrievalCalled` необязательны.
 
 Исходные данные находятся в `data/profile.md` и `data/log.md`; последний одобренный результат — в `data/output.md`.

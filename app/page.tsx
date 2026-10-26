@@ -89,14 +89,20 @@ export default function Home() {
             <h3>Что сделал агент</h3>
             {result.toolCallDetails.length > 0 ? (
               <ol className="tool-calls">
-                {result.toolCallDetails.map((toolCall, index) => (
-                  <li key={`${index}-${toolCall.name}`}>
-                    <span className="tool-call-heading">
+                 {result.toolCallDetails.map((toolCall, index) => (
+                   <li key={`${index}-${toolCall.name}`}>
+                    {toolCall.name === "searchKnowledge" ? (() => {
+                      const query = typeof toolCall.parameters === "object" && toolCall.parameters !== null && "query" in toolCall.parameters
+                        ? String(toolCall.parameters.query)
+                        : "";
+                      const retrieval = result.knowledgeRetrievals.find((item) => item.query === query);
+                      return <strong>🔍 knowledge: {query} → {retrieval?.chunkCount ?? 0} chunks</strong>;
+                    })() : <span className="tool-call-heading">
                       <strong>{toolCall.name}</strong>
                       <span className={`tool-source tool-source-${toolCall.source}`}>
                         [{toolCall.source}]
                       </span>
-                    </span>
+                    </span>}
                     <details>
                       <summary>Параметры вызова</summary>
                       <pre>{JSON.stringify(toolCall.parameters, null, 2)}</pre>

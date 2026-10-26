@@ -9,6 +9,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "mcp:inspect": "tsx scripts/mcpInspect.ts",
+    "ingest": "tsx scripts/ingest.ts",
     "replay": "tsx scripts/replay.ts",
     "eval": "tsx scripts/eval.ts"
   },

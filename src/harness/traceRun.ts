@@ -13,6 +13,7 @@ export interface RunTrace {
     review: RunHealthAgentResult["review"];
   }>;
   toolCalls: string[];
+  knowledgeRetrievals: RunHealthAgentResult["knowledgeRetrievals"];
   finalScore: number | null;
   verdict: RunHealthAgentResult["review"]["verdict"];
   durationMs: number;
@@ -46,6 +47,11 @@ export async function traceRun(
         review: { ...review, issues: [...review.issues] },
       })),
       toolCalls: [...result.toolCalls],
+      knowledgeRetrievals: result.knowledgeRetrievals.map(({ query, headings, chunkCount }) => ({
+        query,
+        headings: [...headings],
+        chunkCount,
+      })),
       finalScore: result.finalScore,
       verdict: result.review.verdict,
       durationMs: result.durationMs,
