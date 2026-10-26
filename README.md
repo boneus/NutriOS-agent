@@ -4,7 +4,7 @@ Next.js-приложение с двумя агентами: Health Coach сос
 
 ## Настройка
 
-Требуется Node.js 20.12 или новее. Установите зависимости:
+Требуется Node.js 22 или новее. Установите зависимости:
 
 ```bash
 npm install
@@ -16,6 +16,8 @@ npm install
 DEEPSEEK_API_KEY=ваш_ключ
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 DEEPSEEK_MODEL=deepseek-chat
+# Необязательно: включает локальный Notion MCP
+NOTION_TOKEN=ntn_...
 ```
 
 `DEEPSEEK_MODEL` необязателен: по умолчанию используется `deepseek-chat`.
@@ -45,9 +47,37 @@ npm run build
 
 Команды запускаются из корня репозитория. `mcp:inspect` не обращается к DeepSeek и не изменяет Markdown-данные: команда только запрашивает списки tools и resources. В проекте нет отдельных test, lint и formatter-команд.
 
-## Локальный Markdown MCP-сервер
+## MCP-серверы как конфигурация
 
-`src/mcp/markdownHealthServer.ts` — отдельный MCP-процесс со stdio-транспортом. `src/mcp/markdownHealthClient.ts` настраивает запуск процесса и фильтрацию tools. На каждый вызов `runHealthAgent` harness поднимает один экземпляр сервера, использует его во всех раундах этого запуска и закрывает в `finally` — в том числе при ошибке агента или reviewer-а.
+Все интеграции описаны одним массивом `{ name, command, args, env?, enabled }` в `src/mcp/servers.config.ts`; там же декларативно указана видимость tools по фазам и optional env-switch. Generic lifecycle manager `src/mcp/configuredServers.ts` поднимает каждый enabled stdio-процесс, автоматически получает его tools и передаёт единый список агенту. Чтобы добавить сервер, нужна новая запись в конфиге — harness и tool-обёртки менять не нужно. Процессы переиспользуются во всех раундах одного запуска и закрываются в `finally`.
+
+| Имя | Пакет / реализация | Что даёт | Авторизация |
+|---|---|---|---|
+| `markdown-health` | `src/mcp/markdownHealthServer.ts` | Профиль, логи, рецепты, сохранение плана | Локальный процесс |
+| `filesystem` | `@modelcontextprotocol/server-filesystem@2026.1.14` | Чтение и запись только в `data/` и `plans/` | Нет; allowlist каталогов в аргументах процесса |
+| `weather` | `open-meteo-mcp-server@2.5.4` | `geocoding`, `weather_forecast` и другие Open-Meteo tools | API-ключ не нужен |
+| `notion` | `@notionhq/notion-mcp-server@2.5.2` | Чтение и создание страниц через Notion API | Internal integration token `NOTION_TOKEN`; без токена сервер молча пропускается |
+
+Weather-пакет выбран как актуальный поддерживаемый Open-Meteo MCP с stdio-запуском через `npx -y -p open-meteo-mcp-server@2.5.4 open-meteo-mcp-server`. Он принимает название места через `geocoding`, затем координаты через `weather_forecast`. Open-Meteo бесплатен без ключа для некоммерческого использования. Версии закреплены в конфиге, поэтому обновление внешнего пакета — явное изменение конфигурации.
+
+### Guardrails: «промпт — просьба, конфиг — стена»
+
+- **Filesystem:** prompt просит писать только запрошенный `plans/<дата>.md`, но настоящая граница — абсолютные пути только `data/` и `plans/`, переданные серверу при запуске. Весь проект и родительские каталоги недоступны.
+- **Notion:** prompt разрешает запись только в «Wellness», но настоящая граница — права internal integration. Перед использованием в Notion откройте настройки integration → Access и предоставьте доступ только одной странице или базе **Wellness**. Сервер включается автоматически лишь при непустом `NOTION_TOKEN`; OAuth не используется.
+- **Weather:** сервер по природе read-only и не меняет локальные или облачные данные, поэтому отдельный write-guardrail ему не требуется. Это пример того, что риск разных MCP-серверов различается.
+- **Фазы:** drafting coach видит read-only health/weather capabilities. Filesystem и Notion выдаются только finalizer-у после `approve`; у markdown-health по-прежнему строгий allowlist, и `append_daily_log` не получает ни один агент.
+
+### Демо
+
+В UI можно отправить:
+
+- `Спланируй тренировку на завтра с учётом погоды` — агент читает город из `data/profile.md`, вызывает `[weather] geocoding` и `[weather] weather_forecast`, ссылается на прогноз и при плохих условиях выбирает зал или домашний вариант.
+- `Составь wellness-план и сохрани его ещё и в отдельный файл plans/<сегодняшняя дата>.md` — после approval finalizer вызывает `[filesystem] write_file`.
+- `Составь wellness-план и сохрани его страницей в мой Notion` — при `NOTION_TOKEN` finalizer создаёт страницу через `[notion]` tool внутри доступной integration области Wellness. Без токена Notion отсутствует в списке tools и остальные сценарии работают как обычно.
+
+Отключение любого сервера через `enabled: false` удаляет его tools без правок harness. Исключение — optional-записи с `enableWhenEnv`: для них также удалите env-switch или переменную окружения; у Notion непустой `NOTION_TOKEN` намеренно включает сервер автоматически.
+
+### Локальный Markdown MCP-контракт
 
 Сервер публикует пять tools:
 
@@ -67,7 +97,7 @@ npm run build
 
 Resources и tools — разные MCP-примитивы. OpenAI Agents SDK подключает к агенту MCP **tools**; resources предназначены для явного чтения MCP-клиентами и не добавляются в prompt автоматически. `logs://recent` возвращает последние семь записей, а tool `read_recent_logs` принимает `days` от 1 до 30.
 
-Сервер разрешает пути `data/` относительно `process.cwd()`, поэтому приложение и скрипты нужно запускать из корня репозитория. Никакой сетевой транспорт или внешний MCP-сервер не используется.
+Markdown-сервер разрешает пути `data/` относительно `process.cwd()`, поэтому приложение и скрипты нужно запускать из корня репозитория. Все MCP-процессы используют stdio; weather и Notion сами обращаются к соответствующим внешним API.
 
 Проверить контракт сервера без обращения к модели:
 
@@ -75,19 +105,25 @@ Resources и tools — разные MCP-примитивы. OpenAI Agents SDK п
 npm run mcp:inspect
 ```
 
-Команда запускает реальный stdio-сервер через MCP-клиент, печатает список tools и resources и корректно завершает дочерний процесс. Она показывает полный контракт сервера, включая `append_daily_log`; это не означает, что данный tool доступен Health Coach.
+Команда запускает все enabled stdio-серверы через MCP-клиент, печатает tools каждого источника и resources markdown-health, затем корректно завершает дочерние процессы. Полный контракт включает `append_daily_log`; это не означает, что данный tool доступен Health Coach.
 
 ### До MCP / После MCP
 
 **До MCP:** каждая интеграция с данными была отдельным локальным skill, вручную импортированным и подключённым к `Agent.tools`. Агент был связан с конкретными функциями чтения и записи файлов.
 
-**После MCP:** профиль, дневник, рецепты и сохранение плана предоставляет стандартный MCP-сервер. OpenAI Agents SDK получает его как источник tools, поэтому MCP-вызовы попадают в тот же поток `function_call` и в тот же `toolCalls` трейса. При этом `suggestWorkoutTemplate` и `generateShoppingList` оставлены обычными локальными tools — в коде виден контраст между прямой функцией и MCP-интеграцией.
+**После MCP:** профиль, дневник, рецепты и сохранение плана предоставляет собственный сервер, а filesystem, weather и optional Notion подключаются готовыми пакетами одной конфигурацией. OpenAI Agents SDK получает их неизменённые tools. `suggestWorkoutTemplate` и `generateShoppingList` оставлены обычными локальными tools — в коде виден контраст между прямой функцией и MCP-интеграцией.
 
 Safety Reviewer, reviewer JSON-валидация, scoring, rounds и traces остаются в harness и не переносятся в MCP. Старые data-skills сохранены в `src/skills/` с суффиксом `.legacy.ts` (`profile.legacy.ts`, `logs.legacy.ts`, `recipes.legacy.ts`, `plans.legacy.ts`) для сравнения с подходом «до MCP», но к Health Coach не подключены. `shopping.ts` и `workouts.ts` по-прежнему используются как обычные локальные tools.
 
 ## Как дебажить агента
 
-Каждый успешно завершившийся запуск автоматически сохраняет компактный trace в `runs/run-<timestamp>.json`: задачу, модель, версии промптов, раунды reviewer-а с фрагментами планов, tool calls, verdict, score и длительность. MCP-вызовы (`read_profile`, `read_recent_logs`, `list_recipes`, `save_health_plan`) записываются в тот же массив `toolCalls`, что и локальные tools. В ответе UI каждый элемент `toolCallDetails` содержит `source: "mcp" | "local"`, поэтому рядом с вызовом отображается источник — `MCP` или `Локальный tool`. Компактный trace при этом не раздувается: в нём остаётся только массив имён `toolCalls`. Ошибка локальной записи не прерывает ответ агента. Рабочие трейсы исключены из Git; `runs/run-example.json` документирует формат.
+Каждый успешно завершившийся запуск автоматически сохраняет компактный trace в `runs/run-<timestamp>.json`: задачу, модель, версии промптов, раунды reviewer-а с фрагментами планов, tool calls, verdict, score и длительность. В compact trace имена имеют вид `[weather] weather_forecast`, `[filesystem] write_file`, `[markdown-health] read_profile`, `[notion] ...` или `[local] suggestWorkoutTemplate`. UI получает структурированный `source` и показывает такой же badge. Ошибка локальной записи trace не прерывает ответ агента. Рабочие трейсы исключены из Git; `runs/run-example.json` документирует формат.
+
+## Какие MCP могут пригодиться дальше
+
+- **Google Calendar** — планирование тренировок и напоминаний; требует OAuth, поэтому намеренно вынесен за рамки этой конфигурации.
+- **Database MCP** (например, PostgreSQL) — аналитика долгосрочных wellness-метрик; подключать с отдельным read/write role и минимальными правами.
+- **Web Search MCP** — поиск актуальных общих рекомендаций и местных событий; требует контроля источников и защиты от недоверенного контента.
 
 Чтобы повторить задачу из старого trace на текущей модели и промптах и увидеть сравнение результатов:
 

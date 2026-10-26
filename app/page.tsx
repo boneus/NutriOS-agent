@@ -94,7 +94,7 @@ export default function Home() {
                     <span className="tool-call-heading">
                       <strong>{toolCall.name}</strong>
                       <span className={`tool-source tool-source-${toolCall.source}`}>
-                        {toolCall.source === "mcp" ? "MCP" : "Локальный tool"}
+                        [{toolCall.source}]
                       </span>
                     </span>
                     <details>

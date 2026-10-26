@@ -2,7 +2,7 @@ import { OpenAIProvider, Runner, type RunItem } from "@openai/agents";
 import { loadEnvFile } from "node:process";
 import { createHealthCoach } from "../agents/healthCoach";
 import { createSafetyReviewer } from "../agents/safetyReviewer";
-import { createMarkdownHealthMcpServer, isMarkdownHealthMcpTool } from "../mcp/markdownHealthClient";
+import { ConfiguredMcpServers, type ToolSource } from "../mcp/configuredServers";
 import { generateShoppingListTool } from "../skills/shopping";
 import { loadActivePrompts, type PromptVersions } from "./promptVersions";
 import { RoundHistory, type RoundState } from "./rounds";
@@ -24,7 +24,7 @@ export interface RunHealthAgentResult {
 export interface ToolCallDetails {
   name: string;
   parameters: unknown;
-  source: "mcp" | "local";
+  source: ToolSource;
 }
 
 function parseToolParameters(rawParameters: string): unknown {
@@ -35,13 +35,16 @@ function parseToolParameters(rawParameters: string): unknown {
   }
 }
 
-function collectToolCalls(result: { newItems: RunItem[] }): ToolCallDetails[] {
+function collectToolCalls(
+  result: { newItems: RunItem[] },
+  mcpServers: ConfiguredMcpServers,
+): ToolCallDetails[] {
   return result.newItems.flatMap((item) => {
     if (item.type !== "tool_call_item" || item.rawItem.type !== "function_call") return [];
     return [{
       name: item.rawItem.name,
       parameters: parseToolParameters(item.rawItem.arguments),
-      source: isMarkdownHealthMcpTool(item.rawItem.name) ? "mcp" : "local",
+      source: mcpServers.sourceFor(item.rawItem.name),
     }];
   });
 }
@@ -79,18 +82,18 @@ export async function runHealthAgent(
     baseURL: requiredEnv("DEEPSEEK_BASE_URL"),
     useResponses: false,
   });
-  const markdownHealthServer = createMarkdownHealthMcpServer();
+  const mcpServers = new ConfiguredMcpServers();
 
   try {
-    await markdownHealthServer.connect();
+    await mcpServers.connect();
     const runner = new Runner({ modelProvider: provider, tracingDisabled: true });
     const coach = createHealthCoach(model, activePrompts.coach, {
-      mcpServers: [markdownHealthServer],
+      mcpServers: mcpServers.all(),
     });
     const finalizer = createHealthCoach(model, activePrompts.coach, {
       name: "Health Coach Finalizer",
       tools: [generateShoppingListTool],
-      mcpServers: [markdownHealthServer],
+      mcpServers: mcpServers.all(),
     });
     const reviewer = createSafetyReviewer(model, activePrompts.reviewer);
     const history = new RoundHistory();
@@ -118,7 +121,7 @@ export async function runHealthAgent(
         rounds,
         finalScore,
         promptVersions: { ...activePrompts.versions },
-        toolCalls: toolCallDetails.map(({ name }) => name),
+        toolCalls: toolCallDetails.map(({ name }) => mcpServers.prefixedToolName(name)),
         toolCallDetails: toolCallDetails.map(({ name, parameters, source }) => ({ name, parameters, source })),
         durationMs: Date.now() - startedAt,
       };
@@ -133,7 +136,7 @@ export async function runHealthAgent(
       const coachInput = `Задача:\n${normalizedTask}` +
         (draft ? `\n\nПредыдущий план:\n${draft}\n\nИсправь его по замечаниям reviewer-а:\n- ${issues.join("\n- ")}` : "");
       const result = await runner.run(coach, coachInput);
-      toolCallDetails.push(...collectToolCalls(result));
+      toolCallDetails.push(...collectToolCalls(result, mcpServers));
       if (typeof result.finalOutput !== "string") throw new Error("Коуч не вернул план");
 
       draft = result.finalOutput.trim();
@@ -148,11 +151,13 @@ export async function runHealthAgent(
         // approval. The drafting coach cannot access any write-capable MCP tool.
         const finalization = await runner.run(finalizer,
           `План уже одобрен Safety Reviewer. Обязательно вызови save_health_plan ровно один раз, передав план без изменений. ` +
-          `Если исходная задача просит список покупок, также вызови generateShoppingList; иначе не вызывай его.\n\n` +
+          `Если исходная задача просит список покупок, также вызови generateShoppingList; иначе не вызывай его. ` +
+          `Если она просит отдельный файл plans/<дата>.md, вызови filesystem write_file и сохрани туда тот же план. ` +
+          `Если она просит сохранить страницу в Notion и notion-tools доступны, создай страницу только внутри Wellness.\n\n` +
           `Исходная задача:\n${normalizedTask}\n\nОдобренный план:\n${draft}`,
           { maxTurns: 4 },
         );
-        const finalizationToolCalls = collectToolCalls(finalization);
+        const finalizationToolCalls = collectToolCalls(finalization, mcpServers);
         toolCallDetails.push(...finalizationToolCalls);
         if (!finalizationToolCalls.some(({ name }) => name === "save_health_plan")) {
           throw new Error("Коуч не сохранил одобренный план");
@@ -167,6 +172,6 @@ export async function runHealthAgent(
     }
     throw new Error(`План не одобрен после ${maxRounds} раундов ревизии`);
   } finally {
-    await markdownHealthServer.close();
+    await mcpServers.close();
   }
 }

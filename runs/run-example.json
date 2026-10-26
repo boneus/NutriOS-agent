@@ -18,8 +18,8 @@
     }
   ],
   "toolCalls": [
-    "getProfile",
-    "savePlan"
+    "[markdown-health] read_profile",
+    "[markdown-health] save_health_plan"
   ],
   "finalScore": 8,
   "verdict": "approve",
