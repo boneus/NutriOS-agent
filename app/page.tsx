@@ -91,7 +91,12 @@ export default function Home() {
               <ol className="tool-calls">
                 {result.toolCallDetails.map((toolCall, index) => (
                   <li key={`${index}-${toolCall.name}`}>
-                    <strong>{toolCall.name}</strong>
+                    <span className="tool-call-heading">
+                      <strong>{toolCall.name}</strong>
+                      <span className={`tool-source tool-source-${toolCall.source}`}>
+                        {toolCall.source === "mcp" ? "MCP" : "Локальный tool"}
+                      </span>
+                    </span>
                     <details>
                       <summary>Параметры вызова</summary>
                       <pre>{JSON.stringify(toolCall.parameters, null, 2)}</pre>
